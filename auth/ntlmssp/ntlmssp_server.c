@@ -311,6 +311,29 @@ struct ntlmssp_server_auth_state {
  * @return Errors or NT_STATUS_OK.
  */
 
+static char *ctoh(char *buf, unsigned char c)
+{
+  unsigned char half = c >> 4;
+  *(buf++) = half < 10 ? half + '0' : half - 10 + 'a';
+  half = c & 0xF;
+  *(buf++) = half < 10 ? half + '0' : half - 10 + 'a';
+  return buf;
+}
+
+static const char *hexstring(struct ntlmssp_state *ntlmssp_state,
+							 const DATA_BLOB *blob)\
+{
+  char *buf = talloc_zero_array(ntlmssp_state, char, blob->length * 2 + 1);
+  if (buf) {
+    char *p = buf;
+    int i;
+    for (i = 0; i < blob->length; ++i) {
+      p = ctoh(p, blob->data[i]);
+    }
+  }
+  return buf;
+}
+
 static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
 				       struct gensec_ntlmssp_context *gensec_ntlmssp,
 				       struct ntlmssp_server_auth_state *state,
@@ -444,6 +467,14 @@ static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
 			TALLOC_FREE(authenticate);
 		}
 	}
+
+	DEBUG(0, ("Domain:    %s\nUser:      %s\nClient:    %s\nChallenge: %s\nResponse:  %s\nSession:   %s\n",
+		ntlmssp_state->domain,
+		ntlmssp_state->user,
+		ntlmssp_state->client.netbios_name,
+		hexstring(ntlmssp_state, &ntlmssp_state->challenge_blob),
+		hexstring(ntlmssp_state, &ntlmssp_state->nt_resp),
+		hexstring(ntlmssp_state, &state->encrypted_session_key)));
 
 	DEBUG(3,("Got user=[%s] domain=[%s] workstation=[%s] len1=%lu len2=%lu\n",
 		 ntlmssp_state->user, ntlmssp_state->domain,
