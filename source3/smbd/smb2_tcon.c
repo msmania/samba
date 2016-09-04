@@ -207,7 +207,7 @@ static NTSTATUS smbd_smb2_tree_connect(struct smbd_smb2_request *req,
 		}
 	}
 
-	DEBUG(10,("smbd_smb2_tree_connect: path[%s] share[%s]\n",
+	DEBUG(0,("smbd_smb2_tree_connect: path[%s] share[%s]\n",
 		  in_path, share));
 
 	if (security_session_user_level(compat_vuser->session_info, NULL) < SECURITY_USER) {

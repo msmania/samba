@@ -969,7 +969,7 @@ void reply_tcon_and_X(struct smb_request *req)
 		return;
 	}
 
-	DEBUG(4,("Client requested device type [%s] for share [%s]\n", client_devicetype, service));
+	DEBUG(0,("Client requested device type [%s] for share [%s]\n", client_devicetype, service));
 
 	nt_status = smb1srv_session_lookup(xconn,
 					   req->vuid, now, &session);
