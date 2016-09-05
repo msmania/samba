@@ -321,7 +321,7 @@ static char *ctoh(char *buf, unsigned char c)
 }
 
 static const char *hexstring(struct ntlmssp_state *ntlmssp_state,
-							 const DATA_BLOB *blob)\
+							 const DATA_BLOB *blob)
 {
   char *buf = talloc_zero_array(ntlmssp_state, char, blob->length * 2 + 1);
   if (buf) {
@@ -332,6 +332,43 @@ static const char *hexstring(struct ntlmssp_state *ntlmssp_state,
     }
   }
   return buf;
+}
+
+static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state)
+{
+#pragma pack(push, 1)
+	typedef struct _ntlm_challenge_message
+	{
+		uint64_t signature;
+		uint32_t messagetype;
+		uint64_t targetnamefields;
+		uint32_t negotiateflags;
+		uint64_t serverchallenge;
+	} ntlm_challenge_message;
+#pragma pack(pop)
+	if (ntlmssp_state
+		&& ntlmssp_state->challenge_blob.length >= sizeof(ntlm_challenge_message))
+	{
+		const char NTLMSSP[] = "NTLMSSP";
+		const ntlm_challenge_message *challenge =
+			(const ntlm_challenge_message *)ntlmssp_state->challenge_blob.data;
+		if (challenge->signature == *(uint64_t*)NTLMSSP
+			&& challenge->messagetype == NTLMSSP_CHALLENGE)
+		{
+			DATA_BLOB server_challenge;
+			server_challenge.length = 8;
+			server_challenge.data = (uint8_t*)&challenge->serverchallenge;
+			DEBUG(0, ("Challenge: %s\n",
+				hexstring(ntlmssp_state, &server_challenge)));
+		}
+		if (ntlmssp_state->nt_resp.length > 16) {
+			DATA_BLOB ntlmv2_response;
+			ntlmv2_response.length = ntlmssp_state->nt_resp.length - 16;
+			ntlmv2_response.data = ntlmssp_state->nt_resp.data + 16;
+			DEBUG(0, ("Reponse  : %s\n",
+				hexstring(ntlmssp_state, &ntlmv2_response)));
+		}
+	}
 }
 
 static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
@@ -468,13 +505,11 @@ static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
 		}
 	}
 
-	DEBUG(0, ("Domain:    %s\nUser:      %s\nClient:    %s\nChallenge: %s\nResponse:  %s\nSession:   %s\n",
+	DEBUG(0, ("Domain:    %s\nUser:      %s\nClient:    %s\n",
 		ntlmssp_state->domain,
 		ntlmssp_state->user,
-		ntlmssp_state->client.netbios_name,
-		hexstring(ntlmssp_state, &ntlmssp_state->challenge_blob),
-		hexstring(ntlmssp_state, &ntlmssp_state->nt_resp),
-		hexstring(ntlmssp_state, &state->encrypted_session_key)));
+		ntlmssp_state->client.netbios_name));
+	log_challengeresponse(ntlmssp_state);
 
 	DEBUG(3,("Got user=[%s] domain=[%s] workstation=[%s] len1=%lu len2=%lu\n",
 		 ntlmssp_state->user, ntlmssp_state->domain,
