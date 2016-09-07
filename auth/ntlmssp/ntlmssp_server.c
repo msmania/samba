@@ -334,39 +334,101 @@ static const char *hexstring(struct ntlmssp_state *ntlmssp_state,
   return buf;
 }
 
-static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state)
+static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
+								  const DATA_BLOB *request)
 {
 #pragma pack(push, 1)
+	typedef struct _pointer_to_buffer
+	{
+		uint16_t len;
+		uint16_t maxlen;
+		uint32_t offset;
+	} pointer_to_buffer;
+
 	typedef struct _ntlm_challenge_message
 	{
 		uint64_t signature;
 		uint32_t messagetype;
-		uint64_t targetnamefields;
+		pointer_to_buffer targetnamefields;
 		uint32_t negotiateflags;
 		uint64_t serverchallenge;
 	} ntlm_challenge_message;
-#pragma pack(pop)
-	if (ntlmssp_state
-		&& ntlmssp_state->challenge_blob.length >= sizeof(ntlm_challenge_message))
+
+	typedef struct _ntlm_authenticate_message
 	{
-		const char NTLMSSP[] = "NTLMSSP";
+		uint64_t signature;
+		uint32_t messagetype;
+		uint64_t lmchallengeresponse;
+		uint64_t ntchallengeresponse;
+		pointer_to_buffer domainname;
+		pointer_to_buffer username;
+		pointer_to_buffer workstationname;
+	} ntlm_authenticate_message;
+#pragma pack(pop)
+
+	const char NTLMSSP[] = "NTLMSSP";
+
+	if (!request || !ntlmssp_state || !ntlmssp_state->unicode)
+	{
+		return;
+	}
+
+	if (request->length >= sizeof(ntlm_authenticate_message))
+	{
+		const ntlm_authenticate_message *auth =
+			(const ntlm_authenticate_message *)request->data;
+		if (auth->signature == *(uint64_t*)NTLMSSP
+			&& auth->messagetype == NTLMSSP_AUTH)
+		{
+			DATA_BLOB user_and_domain = data_blob_talloc(ntlmssp_state,
+					((uint8_t *)auth) + auth->username.offset,
+					auth->username.len);
+
+			// Username is always upper case
+			for (smb_ucs2_t *p = user_and_domain.data;
+				 p < user_and_domain.data + user_and_domain.length;
+				 ++p)
+			{
+				*p = toupper_w(*p);
+			}
+
+			if (auth->domainname.len > 0) {
+				data_blob_append(ntlmssp_state,
+					&user_and_domain,
+					((uint8_t *)auth) + auth->domainname.offset,
+					auth->domainname.len);
+			}
+
+			DEBUG(0, ("UserName : %s\n",
+				hexstring(ntlmssp_state, &user_and_domain)));
+
+			data_blob_free(&user_and_domain);
+		}
+	}
+
+	if (ntlmssp_state->challenge_blob.length >= sizeof(ntlm_challenge_message))
+	{
 		const ntlm_challenge_message *challenge =
 			(const ntlm_challenge_message *)ntlmssp_state->challenge_blob.data;
 		if (challenge->signature == *(uint64_t*)NTLMSSP
 			&& challenge->messagetype == NTLMSSP_CHALLENGE)
 		{
-			DATA_BLOB server_challenge;
-			server_challenge.length = 8;
-			server_challenge.data = (uint8_t*)&challenge->serverchallenge;
+			DATA_BLOB server_challenge = data_blob_const(
+				&challenge->serverchallenge, 8);
 			DEBUG(0, ("Challenge: %s\n",
 				hexstring(ntlmssp_state, &server_challenge)));
 		}
 		if (ntlmssp_state->nt_resp.length > 16) {
-			DATA_BLOB ntlmv2_response;
-			ntlmv2_response.length = ntlmssp_state->nt_resp.length - 16;
-			ntlmv2_response.data = ntlmssp_state->nt_resp.data + 16;
-			DEBUG(0, ("Reponse  : %s\n",
-				hexstring(ntlmssp_state, &ntlmv2_response)));
+			DATA_BLOB ntlmv2_auth = data_blob_const(
+				ntlmssp_state->nt_resp.data + 16,
+				ntlmssp_state->nt_resp.length - 16);
+			DEBUG(0, ("Auth     : %s\n",
+				hexstring(ntlmssp_state, &ntlmv2_auth)));
+
+			DATA_BLOB ntlmv2_resp = data_blob_const(
+				ntlmssp_state->nt_resp.data, 16);
+			DEBUG(0, ("Response : %s\n",
+				hexstring(ntlmssp_state, &ntlmv2_resp)));
 		}
 	}
 }
@@ -509,7 +571,7 @@ static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
 		ntlmssp_state->domain,
 		ntlmssp_state->user,
 		ntlmssp_state->client.netbios_name));
-	log_challengeresponse(ntlmssp_state);
+	log_challengeresponse(ntlmssp_state, &request);
 
 	DEBUG(3,("Got user=[%s] domain=[%s] workstation=[%s] len1=%lu len2=%lu\n",
 		 ntlmssp_state->user, ntlmssp_state->domain,
