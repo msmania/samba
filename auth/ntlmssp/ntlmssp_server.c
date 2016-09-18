@@ -334,7 +334,22 @@ static const char *hexstring(struct ntlmssp_state *ntlmssp_state,
   return buf;
 }
 
-static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
+static int open_file() {
+  struct timeval  tv;
+  gettimeofday(&tv, NULL);
+  struct tm tm;
+  if(gmtime_r(&tv.tv_sec, &tm) != NULL)
+  {
+    char fmt[64], fname[64];
+    strftime(fmt, sizeof(fmt), "%Y-%m-%d-%H-%M-%S-%%03u", &tm);
+    snprintf(fname, sizeof(fname), fmt, tv.tv_usec / 1000);
+    return creat(fname, 0644);
+  }
+  return -1;
+}
+
+static void log_challengeresponse(int fd,
+								  struct ntlmssp_state *ntlmssp_state,
 								  const DATA_BLOB *request)
 {
 #pragma pack(push, 1)
@@ -373,6 +388,7 @@ static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
 		return;
 	}
 
+	const char *p;
 	if (request->length >= sizeof(ntlm_authenticate_message))
 	{
 		const ntlm_authenticate_message *auth =
@@ -386,7 +402,7 @@ static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
 
 			// Username is always upper case
 			for (smb_ucs2_t *p = user_and_domain.data;
-				 p < user_and_domain.data + user_and_domain.length;
+				 p < user_and_domain.data + user_and_domain.length - 1;
 				 ++p)
 			{
 				*p = toupper_w(*p);
@@ -399,8 +415,10 @@ static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
 					auth->domainname.len);
 			}
 
-			DEBUG(0, ("UserName : %s\n",
-				hexstring(ntlmssp_state, &user_and_domain)));
+			p = hexstring(ntlmssp_state, &user_and_domain);
+			DEBUG(0, ("UserAndDomain=%s\n", p));
+			fdprintf(fd, "UserAndDomain=%s\n", p);
+			talloc_free(p);
 
 			data_blob_free(&user_and_domain);
 		}
@@ -415,20 +433,26 @@ static void log_challengeresponse(struct ntlmssp_state *ntlmssp_state,
 		{
 			DATA_BLOB server_challenge = data_blob_const(
 				&challenge->serverchallenge, 8);
-			DEBUG(0, ("Challenge: %s\n",
-				hexstring(ntlmssp_state, &server_challenge)));
+			p = hexstring(ntlmssp_state, &server_challenge);
+			DEBUG(0, ("Challenge=%s\n", p));
+			fdprintf(fd, "Challenge=%s\n", p);
+			talloc_free(p);
 		}
 		if (ntlmssp_state->nt_resp.length > 16) {
 			DATA_BLOB ntlmv2_auth = data_blob_const(
 				ntlmssp_state->nt_resp.data + 16,
 				ntlmssp_state->nt_resp.length - 16);
-			DEBUG(0, ("Auth     : %s\n",
-				hexstring(ntlmssp_state, &ntlmv2_auth)));
+			p = hexstring(ntlmssp_state, &ntlmv2_auth);
+			DEBUG(0, ("Auth=%s\n", p));
+			fdprintf(fd, "Auth=%s\n", p);
+			talloc_free(p);
 
 			DATA_BLOB ntlmv2_resp = data_blob_const(
 				ntlmssp_state->nt_resp.data, 16);
-			DEBUG(0, ("Response : %s\n",
-				hexstring(ntlmssp_state, &ntlmv2_resp)));
+			p = hexstring(ntlmssp_state, &ntlmv2_resp);
+			DEBUG(0, ("Response=%s\n", p));
+			fdprintf(fd, "Response=%s\n", p);
+			talloc_free(p);
 		}
 	}
 }
@@ -571,7 +595,14 @@ static NTSTATUS ntlmssp_server_preauth(struct gensec_security *gensec_security,
 		ntlmssp_state->domain,
 		ntlmssp_state->user,
 		ntlmssp_state->client.netbios_name));
-	log_challengeresponse(ntlmssp_state, &request);
+
+	int fd = open_file();
+	fdprintf(fd, "Domain:    %s\nUser:      %s\nClient:    %s\n",
+		ntlmssp_state->domain,
+		ntlmssp_state->user,
+		ntlmssp_state->client.netbios_name);
+	log_challengeresponse(fd, ntlmssp_state, &request);
+	if (fd != -1) close(fd);
 
 	DEBUG(3,("Got user=[%s] domain=[%s] workstation=[%s] len1=%lu len2=%lu\n",
 		 ntlmssp_state->user, ntlmssp_state->domain,
